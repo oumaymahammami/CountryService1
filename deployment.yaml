@@ -15,6 +15,7 @@ spec:
       containers:
       - name: country-service-container
         image: oumayma511/country-service:latest
+        command: ["java", "-jar", "/app/app.jar"]  # ⬅️ AJOUTER CETTE LIGNE
         ports:
         - containerPort: 8082
         env:
