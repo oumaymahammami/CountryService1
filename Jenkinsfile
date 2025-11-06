@@ -1,5 +1,4 @@
-# Créer un nouveau Jenkinsfile corrigé
-cat > Jenkinsfile << 'EOF'
+
 pipeline {
     agent any
     tools {
@@ -91,4 +90,4 @@ VAULT_EOF
         }
     }
 }
-EOF
+
