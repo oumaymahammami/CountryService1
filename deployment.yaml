@@ -1,9 +1,10 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: my-country-service
+  name: country-service
+  namespace: jenkins
 spec:
-  replicas: 3
+  replicas: 2
   selector:
     matchLabels:
       app: country-service
@@ -13,17 +14,10 @@ spec:
         app: country-service
     spec:
       containers:
-      - name: country-service-container
-        image: oumayma511/country-service:latest
-        command: ["java", "-jar", "/app/app.jar"]  # ⬅️ AJOUTER CETTE LIGNE
+      - name: country-service
+        image: jamina2385/my-country-service:v1
         ports:
-        - containerPort: 8082
+        - containerPort: 8080
         env:
-        - name: SPRING_DATASOURCE_URL
-          value: "jdbc:h2:mem:testdb"
-        - name: SPRING_DATASOURCE_DRIVER_CLASS_NAME
-          value: "org.h2.Driver"
-        - name: SPRING_JPA_DATABASE_PLATFORM
-          value: "org.hibernate.dialect.H2Dialect"
-        - name: SPRING_H2_CONSOLE_ENABLED
-          value: "true"
+        - name: SPRING_PROFILES_ACTIVE
+          value: "prod"

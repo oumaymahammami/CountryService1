@@ -1,0 +1,17 @@
+apiVersion: v1
+clusters:
+- cluster:
+    certificate-authority-data: YOUR_CERT_DATA
+    server: https://your-kubernetes-server:6443
+  name: your-cluster
+contexts:
+- context:
+    cluster: your-cluster
+    user: your-user
+  name: your-context
+current-context: your-context
+kind: Config
+users:
+- name: your-user
+  user:
+    token: YOUR_TOKEN
