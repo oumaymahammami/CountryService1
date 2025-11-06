@@ -1,4 +1,3 @@
-
 pipeline {
     agent any
     tools {
@@ -20,46 +19,37 @@ pipeline {
 
         stage('Build & Package') {
             steps {
-                echo '🔧 Building and packaging...'
                 sh 'mvn clean package -DskipTests'
             }
         }
 
         stage('Deploy with Ansible') {
             steps {
-                echo '🚀 Deploying with Ansible...'
                 script {
                     withCredentials([usernamePassword(
                         credentialsId: DOCKERHUB_CREDENTIALS_ID,
                         usernameVariable: 'DOCKER_USERNAME',
                         passwordVariable: 'DOCKER_PASSWORD'
                     )]) {
-                        // Créer un fichier vault temporaire
-                        sh '''
-                        cat > vault.yml << VAULT_EOF
-docker_registry_username: $DOCKER_USERNAME
-docker_registry_password: $DOCKER_PASSWORD
-VAULT_EOF
-
-                        # Crypter le vault
-                        echo "vaultpass123" | ansible-vault encrypt vault.yml --vault-password-file=stdin
-                        
-                        # Vérifier le contenu
-                        echo "=== Vault file created ==="
-                        ls -la vault.yml
-                        '''
+                        // Méthode SIMPLIFIÉE - utiliser les variables directement
+                        sh """
+                            # Créer un fichier vault avec echo
+                            echo 'docker_registry_username: $DOCKER_USERNAME' > vault.yml
+                            echo 'docker_registry_password: $DOCKER_PASSWORD' >> vault.yml
+                            
+                            # Crypter le vault
+                            ansible-vault encrypt vault.yml --vault-password-file <(echo "vaultpass123")
+                            
+                            # Vérifier le vault
+                            echo "=== Vault file created ==="
+                            ls -la vault.yml
+                        """
                         
                         // Test syntaxique
                         sh 'ansible-playbook playbookCICD.yml --syntax-check'
                         
-                        // Dry run
-                        sh 'echo "vaultpass123" | ansible-playbook playbookCICD.yml --check --vault-password-file=stdin'
-                        
-                        // Déploiement réel
-                        sh 'echo "vaultpass123" | ansible-playbook playbookCICD.yml --vault-password-file=stdin'
-                        
-                        // Nettoyer
-                        sh 'rm -f vault.yml'
+                        // Déploiement avec vault
+                        sh 'ansible-playbook playbookCICD.yml --vault-password-file <(echo "vaultpass123")'
                     }
                 }
             }
@@ -67,10 +57,8 @@ VAULT_EOF
 
         stage('Verify Deployment') {
             steps {
-                echo '✅ Verifying deployment...'
                 sh '''
-                    echo "Waiting for deployment to be ready..."
-                    sleep 30
+                    sleep 10
                     curl -f http://localhost:30008/getcountries || echo "Service check completed"
                 '''
             }
@@ -79,15 +67,14 @@ VAULT_EOF
 
     post {
         always {
-            cleanWs()
             sh 'rm -f vault.yml || true'
+            cleanWs()
         }
         success {
-            echo '🎉 Success! Application deployed with Ansible pipeline.'
+            echo 'Pipeline succeeded'
         }
         failure {
-            echo '❌ Pipeline failed. Check logs for details.'
+            echo 'Pipeline failed'
         }
     }
 }
-
