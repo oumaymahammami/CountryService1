@@ -4,8 +4,8 @@
   connection: local
   
   vars:
-    image_name: my-country-service
-    image_tag: v1
+    image_name: country-service
+    image_tag: "v1"
     dockerfile_path: '.'
     docker_registry_username: "oumayma511"
     docker_registry_password: "dckr_pat_2ff-HkUO5yLPa_kiiD9t-v9IzOY"
