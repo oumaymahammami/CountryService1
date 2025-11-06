@@ -7,7 +7,7 @@ pipeline {
 
     environment {
         DOCKERHUB_CREDENTIALS_ID = 'dockerhub-pwd11111'
-        DOCKER_IMAGE = 'oumaymahammami/country-service'
+        DOCKER_IMAGE = 'oumayma511/country-service'
         DOCKER_REGISTRY = 'docker.io'
     }
 
