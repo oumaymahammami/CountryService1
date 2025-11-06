@@ -70,8 +70,8 @@ pipeline {
                 script {
                     withCredentials([usernamePassword(
                         credentialsId: DOCKERHUB_CREDENTIALS_ID,
-                        usernameVariable: 'DOCKER_USERNAME',
-                        passwordVariable: 'DOCKER_PASSWORD'
+                        usernameVariable: 'oumayma511',
+                        passwordVariable: 'dckr_pat_I_PEFeXmxhYP-FWhC4SL-5HEk6c'
                     )]) {
                         // Debug: Show credential info (without revealing password)
                         sh 'echo "Docker Hub username: $DOCKER_USERNAME"'
