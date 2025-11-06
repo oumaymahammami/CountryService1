@@ -27,8 +27,8 @@ pipeline {
                 script {
                     withCredentials([usernamePassword(
                         credentialsId: DOCKERHUB_CREDENTIALS_ID,
-                        usernameVariable: 'oumaima511',
-                        passwordVariable: 'dckr_pat_2ff-HkUO5yLPa_kiiD9t-v9IzOY'
+                        usernameVariable: 'DOCKER_USERNAME',    // CORRECTION: nom de variable
+                        passwordVariable: 'DOCKER_PASSWORD'     // CORRECTION: nom de variable
                     )]) {
                         // Méthode SIMPLE - exécuter directement avec variables d'environnement
                         sh '''
