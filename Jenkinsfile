@@ -2,11 +2,11 @@ pipeline {
     agent any
     tools {
         jdk 'JDK21'
-        maven 'M2_HOME'
+        maven 'M3'  // ← CORRECTED: Should be 'M3' not 'M2_HOME'
     }
 
     environment {
-        DOCKERHUB_CREDENTIALS_ID = 'dockerhub-pwd'  // ← CHANGER ICI
+        DOCKERHUB_CREDENTIALS_ID = 'dockerhub-pwd'
         DOCKER_IMAGE = 'oumaymahammami/country-service'
         DOCKER_REGISTRY = 'docker.io'
     }
@@ -14,7 +14,7 @@ pipeline {
     stages {
         stage('Checkout') {
             steps {
-                git branch: 'main', url: 'https://github.com/oumaymahammami/country-service.git'
+                git branch: 'main', url: 'https://github.com/oumaymahammami/country-service1.git'  // ← NOTE: repository name
             }
         }
 
@@ -59,7 +59,7 @@ pipeline {
                         usernameVariable: 'DOCKER_USERNAME',
                         passwordVariable: 'DOCKER_PASSWORD'
                     )]) {
-                        sh "echo ${DOCKER_PASSWORD} | docker login -u ${DOCKER_USERNAME} --password-stdin"
+                        sh "echo \$DOCKER_PASSWORD | docker login -u \$DOCKER_USERNAME --password-stdin"  // ← CORRECTED: escape $
                         sh "docker push ${DOCKER_IMAGE}:${BUILD_NUMBER}"
                         sh "docker push ${DOCKER_IMAGE}:latest"
                     }
@@ -75,7 +75,7 @@ pipeline {
                     sh 'docker stop country-service || true'
                     sh 'docker rm country-service || true'
 
-                    // Run new container - CORRECTION: utiliser le port 8082 comme dans votre Dockerfile
+                    // Run new container
                     sh "docker run -d -p 8082:8082 --name country-service ${DOCKER_IMAGE}:${BUILD_NUMBER}"
                 }
             }
@@ -86,7 +86,7 @@ pipeline {
         always {
             echo '✅ Pipeline execution completed!'
             // Clean up Docker images to save space
-            sh 'docker system prune -f || true'
+            sh 'docker system prune -f'
         }
         success {
             echo '🎉 Pipeline succeeded! Application deployed successfully.'
