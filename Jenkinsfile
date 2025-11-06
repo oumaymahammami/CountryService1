@@ -2,7 +2,7 @@ pipeline {
     agent any
     tools {
         jdk 'JDK21'
-        maven 'M3'  // ← CORRECTED: Should be 'M3' not 'M2_HOME'
+        maven 'M2_HOME'  // ← CORRECTED: Should be 'M3' not 'M2_HOME'
     }
 
     environment {
