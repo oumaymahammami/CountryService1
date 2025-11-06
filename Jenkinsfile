@@ -2,7 +2,7 @@ pipeline {
     agent any
     tools {
         jdk 'JDK21'
-        maven 'M2_HOME'  // ← CORRECTED: Should be 'M3' not 'M2_HOME'
+        maven 'M2_HOME'
     }
 
     environment {
@@ -14,7 +14,17 @@ pipeline {
     stages {
         stage('Checkout') {
             steps {
-                git branch: 'main', url: 'https://github.com/oumaymahammami/country-service1.git'  // ← NOTE: repository name
+                git branch: 'main', url: 'https://github.com/oumaymahammami/CountryService1.git'
+            }
+        }
+
+        stage('Verify Files') {
+            steps {
+                echo '📁 Checking project structure...'
+                sh 'pwd'
+                sh 'ls -la'
+                sh 'find . -name "pom.xml" -type f || echo "No POM file found"'
+                sh 'find . -name "Dockerfile" -type f || echo "No Dockerfile found"'
             }
         }
 
@@ -59,7 +69,7 @@ pipeline {
                         usernameVariable: 'DOCKER_USERNAME',
                         passwordVariable: 'DOCKER_PASSWORD'
                     )]) {
-                        sh "echo \$DOCKER_PASSWORD | docker login -u \$DOCKER_USERNAME --password-stdin"  // ← CORRECTED: escape $
+                        sh "echo \$DOCKER_PASSWORD | docker login -u \$DOCKER_USERNAME --password-stdin"
                         sh "docker push ${DOCKER_IMAGE}:${BUILD_NUMBER}"
                         sh "docker push ${DOCKER_IMAGE}:latest"
                     }
