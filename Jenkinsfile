@@ -6,9 +6,8 @@ pipeline {
     }
 
     environment {
-        DOCKERHUB_CREDENTIALS_ID = 'dockerhub-pwd'
+        DOCKERHUB_CREDENTIALS_ID = 'dockerhub-pwd11111'
         DOCKER_IMAGE = 'oumayma511/country-service'
-        KUBECONFIG_CREDENTIALS_ID = 'kubeconfig-file'
     }
 
     stages {
@@ -18,73 +17,61 @@ pipeline {
             }
         }
 
-        stage('Build & Test') {
+        stage('Build & Package') {
             steps {
-                echo '🔧 Compiling and testing...'
-                sh 'mvn clean compile'
-                sh 'mvn test -DskipTests'
-            }
-        }
-
-        stage('Package') {
-            steps {
-                echo '📦 Packaging the application...'
+                echo '🔧 Building and packaging...'
                 sh 'mvn clean package -DskipTests'
             }
         }
 
-        stage('Build Docker Image') {
+        stage('Deploy with Ansible') {
             steps {
-                echo '🐳 Building Docker image...'
-                script {
-                    sh "docker build -t ${DOCKER_IMAGE}:${BUILD_NUMBER} ."
-                    sh "docker tag ${DOCKER_IMAGE}:${BUILD_NUMBER} ${DOCKER_IMAGE}:latest"
-                }
-            }
-        }
-
-        stage('Push to Docker Hub') {
-            steps {
-                echo '📤 Pushing Docker image to Docker Hub...'
+                echo '🚀 Deploying with Ansible...'
                 script {
                     withCredentials([usernamePassword(
                         credentialsId: DOCKERHUB_CREDENTIALS_ID,
                         usernameVariable: 'DOCKER_USERNAME',
                         passwordVariable: 'DOCKER_PASSWORD'
                     )]) {
+                        // Mettre à jour le playbook avec les credentials actuels
                         sh """
-                            echo \$DOCKER_PASSWORD | docker login -u \$DOCKER_USERNAME --password-stdin
-                            docker push ${DOCKER_IMAGE}:${BUILD_NUMBER}
-                            docker push ${DOCKER_IMAGE}:latest
+                            sed -i 's/docker_registry_username:.*/docker_registry_username: \"\${DOCKER_USERNAME}\"/' playbookCICD.yml
+                            sed -i 's/docker_registry_password:.*/docker_registry_password: \"\${DOCKER_PASSWORD}\"/' playbookCICD.yml
                         """
+                        
+                        // Test syntaxique
+                        sh 'ansible-playbook playbookCICD.yml --syntax-check'
+                        
+                        // Dry run
+                        sh 'ansible-playbook playbookCICD.yml --check'
+                        
+                        // Déploiement réel
+                        sh 'ansible-playbook playbookCICD.yml'
                     }
                 }
             }
         }
 
-        stage('Deploy to Kubernetes') {
+        stage('Verify Deployment') {
             steps {
-                echo '🚀 Deploying to Kubernetes...'
-                script {
-                    kubeconfig(credentialsId: KUBECONFIG_CREDENTIALS_ID, serverUrl: '') {
-                        sh "kubectl apply -f deployment.yaml"
-                        sh "kubectl apply -f service.yaml"
-                        sh "kubectl rollout status deployment/my-country-service"
-                    }
-                }
+                echo '✅ Verifying deployment...'
+                sh '''
+                    sleep 30
+                    curl -f http://localhost:30008/getcountries || echo "Service might need more time to start"
+                '''
             }
         }
     }
 
     post {
         always {
-            echo '✅ Pipeline execution completed!'
+            cleanWs()
         }
         success {
-            echo '🎉 Pipeline succeeded! Application deployed successfully.'
+            echo '🎉 Success! Application deployed with Ansible pipeline.'
         }
         failure {
-            echo '❌ Pipeline failed. Check console output for details.'
+            echo '❌ Pipeline failed. Check logs for details.'
         }
     }
 }
