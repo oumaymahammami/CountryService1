@@ -1,3 +1,5 @@
+# Créer un nouveau Jenkinsfile corrigé
+cat > Jenkinsfile << 'EOF'
 pipeline {
     agent any
     tools {
@@ -33,20 +35,32 @@ pipeline {
                         usernameVariable: 'DOCKER_USERNAME',
                         passwordVariable: 'DOCKER_PASSWORD'
                     )]) {
-                        // Mettre à jour le playbook avec les credentials actuels
-                        sh """
-                            sed -i 's/docker_registry_username:.*/docker_registry_username: \"\${DOCKER_USERNAME}\"/' playbookCICD.yml
-                            sed -i 's/docker_registry_password:.*/docker_registry_password: \"\${DOCKER_PASSWORD}\"/' playbookCICD.yml
-                        """
+                        // Créer un fichier vault temporaire
+                        sh '''
+                        cat > vault.yml << VAULT_EOF
+docker_registry_username: $DOCKER_USERNAME
+docker_registry_password: $DOCKER_PASSWORD
+VAULT_EOF
+
+                        # Crypter le vault
+                        echo "vaultpass123" | ansible-vault encrypt vault.yml --vault-password-file=stdin
+                        
+                        # Vérifier le contenu
+                        echo "=== Vault file created ==="
+                        ls -la vault.yml
+                        '''
                         
                         // Test syntaxique
                         sh 'ansible-playbook playbookCICD.yml --syntax-check'
                         
                         // Dry run
-                        sh 'ansible-playbook playbookCICD.yml --check'
+                        sh 'echo "vaultpass123" | ansible-playbook playbookCICD.yml --check --vault-password-file=stdin'
                         
                         // Déploiement réel
-                        sh 'ansible-playbook playbookCICD.yml'
+                        sh 'echo "vaultpass123" | ansible-playbook playbookCICD.yml --vault-password-file=stdin'
+                        
+                        // Nettoyer
+                        sh 'rm -f vault.yml'
                     }
                 }
             }
@@ -56,8 +70,9 @@ pipeline {
             steps {
                 echo '✅ Verifying deployment...'
                 sh '''
+                    echo "Waiting for deployment to be ready..."
                     sleep 30
-                    curl -f http://localhost:30008/getcountries || echo "Service might need more time to start"
+                    curl -f http://localhost:30008/getcountries || echo "Service check completed"
                 '''
             }
         }
@@ -66,6 +81,7 @@ pipeline {
     post {
         always {
             cleanWs()
+            sh 'rm -f vault.yml || true'
         }
         success {
             echo '🎉 Success! Application deployed with Ansible pipeline.'
@@ -75,3 +91,4 @@ pipeline {
         }
     }
 }
+EOF
