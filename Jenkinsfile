@@ -6,7 +6,8 @@ pipeline {
     }
 
     environment {
-        DOCKERHUB_CREDENTIALS_ID = 'dockerhub-pwd'
+        DOCKERHUB_CREDENTIALS_ID = 'dockerhub-token'
+        DOCKERHUB_USERNAME = 'oumaymahammami'
         DOCKER_IMAGE = 'oumaymahammami/country-service'
         DOCKER_REGISTRY = 'docker.io'
     }
@@ -32,7 +33,6 @@ pipeline {
             steps {
                 echo '🔧 Compiling and testing...'
                 sh 'mvn clean compile'
-                // SKIP TESTS - This is the key change
                 sh 'mvn test -DskipTests'
             }
             post {
@@ -45,7 +45,6 @@ pipeline {
         stage('Package') {
             steps {
                 echo '📦 Packaging the application...'
-                // Also skip tests here to ensure packaging works
                 sh 'mvn clean package -DskipTests'
             }
         }
@@ -66,14 +65,15 @@ pipeline {
             steps {
                 echo '📤 Pushing Docker image to Docker Hub...'
                 script {
-                    withCredentials([usernamePassword(
+                    withCredentials([string(
                         credentialsId: DOCKERHUB_CREDENTIALS_ID,
-                        usernameVariable: 'DOCKER_USERNAME',
-                        passwordVariable: 'DOCKER_PASSWORD'
+                        variable: 'DOCKER_PASSWORD'
                     )]) {
-                        sh "echo \$DOCKER_PASSWORD | docker login -u \$DOCKER_USERNAME --password-stdin"
-                        sh "docker push ${DOCKER_IMAGE}:${BUILD_NUMBER}"
-                        sh "docker push ${DOCKER_IMAGE}:latest"
+                        sh """
+                            docker login -u $DOCKERHUB_USERNAME -p $DOCKER_PASSWORD
+                            docker push ${DOCKER_IMAGE}:${BUILD_NUMBER}
+                            docker push ${DOCKER_IMAGE}:latest
+                        """
                     }
                 }
             }
