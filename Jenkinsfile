@@ -6,9 +6,9 @@ pipeline {
     }
 
     environment {
-        DOCKERHUB_CREDENTIALS_ID = 'dockerhub-pwd11111'
+        DOCKERHUB_CREDENTIALS_ID = 'dockerhub-pwd'
         DOCKER_IMAGE = 'oumayma511/country-service'
-        DOCKER_REGISTRY = 'docker.io'
+        KUBECONFIG_CREDENTIALS_ID = 'kubeconfig-file'
     }
 
     stages {
@@ -18,26 +18,11 @@ pipeline {
             }
         }
 
-        stage('Verify Files') {
-            steps {
-                echo '📁 Checking project structure...'
-                sh 'pwd'
-                sh 'ls -la'
-                sh 'find . -name "pom.xml" -type f || echo "No POM file found"'
-                sh 'find . -name "Dockerfile" -type f || echo "No Dockerfile found"'
-            }
-        }
-
         stage('Build & Test') {
             steps {
                 echo '🔧 Compiling and testing...'
                 sh 'mvn clean compile'
                 sh 'mvn test -DskipTests'
-            }
-            post {
-                success {
-                    junit allowEmptyResults: true, testResults: '**/target/surefire-reports/*.xml'
-                }
             }
         }
 
@@ -54,7 +39,6 @@ pipeline {
                 script {
                     sh "docker build -t ${DOCKER_IMAGE}:${BUILD_NUMBER} ."
                     sh "docker tag ${DOCKER_IMAGE}:${BUILD_NUMBER} ${DOCKER_IMAGE}:latest"
-                    sh "docker images | grep ${DOCKER_IMAGE}"
                 }
             }
         }
@@ -78,13 +62,15 @@ pipeline {
             }
         }
 
-        stage('Deploy') {
+        stage('Deploy to Kubernetes') {
             steps {
-                echo '🚀 Deploying application...'
+                echo '🚀 Deploying to Kubernetes...'
                 script {
-                    sh 'docker stop country-service || true'
-                    sh 'docker rm country-service || true'
-                    sh "docker run -d -p 8082:8082 --name country-service ${DOCKER_IMAGE}:${BUILD_NUMBER}"
+                    kubeconfig(credentialsId: KUBECONFIG_CREDENTIALS_ID, serverUrl: '') {
+                        sh "kubectl apply -f deployment.yaml"
+                        sh "kubectl apply -f service.yaml"
+                        sh "kubectl rollout status deployment/my-country-service"
+                    }
                 }
             }
         }
@@ -93,11 +79,9 @@ pipeline {
     post {
         always {
             echo '✅ Pipeline execution completed!'
-            sh 'docker system prune -f'
         }
         success {
             echo '🎉 Pipeline succeeded! Application deployed successfully.'
-            sh "echo 'Deployment successful: ${DOCKER_IMAGE}:${BUILD_NUMBER}'"
         }
         failure {
             echo '❌ Pipeline failed. Check console output for details.'
