@@ -1,4 +1,3 @@
-
 server:
   port: 8080
 
@@ -8,25 +7,55 @@ management:
       exposure:
         include: health,info,metrics,prometheus
       base-path: /actuator
+    enabled-by-default: true
   endpoint:
     health:
       show-details: always
       enabled: true
+      show-components: always
+      group:
+        readiness:
+          include: readinessState,db,diskSpace
+        liveness:
+          include: livenessState,ping
     metrics:
       enabled: true
     prometheus:
       enabled: true
+  health:
+    livenessstate:
+      enabled: true
+    readinessstate:
+      enabled: true
 
 spring:
   security:
-    user:
-      password: none
+    basic:
+      enable: false
   h2:
     console:
       enabled: true
       path: /h2-console
+      settings:
+        web-allow-others: true
   jpa:
     defer-datasource-initialization: true
+    show-sql: true
+    properties:
+      hibernate:
+        format_sql: true
   sql:
     init:
       mode: always
+      platform: h2
+  datasource:
+    url: jdbc:h2:mem:testdb
+    driverClassName: org.h2.Driver
+    username: sa
+    password: 
+
+logging:
+  level:
+    com.demo.countryservice: DEBUG
+    org.springframework.web: INFO
+    org.hibernate: INFO
