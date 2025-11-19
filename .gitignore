@@ -1,0 +1,11 @@
+target/
+.classpath
+.project
+.settings/
+*.jar
+.idea/
+*.iml
+.vscode/
+.DS_Store
+config  # Le fichier kubeconfig avec des données sensibles
+vault.yml

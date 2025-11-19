@@ -1,0 +1,170 @@
+---
+- name: Build and Deploy Docker Image to Kubernetes with Monitoring
+  hosts: localhost
+  connection: local
+  
+  # IMPORTANT: Utiliser le vault pour les secrets
+  vars_files:
+    - vault.yml
+  
+  vars:
+    image_name: country-service
+    image_tag: "v1"
+    dockerfile_path: '.'
+    monitoring_namespace: monitoring
+    app_namespace: jenkins
+
+  tasks:
+    - name: Create monitoring namespace if it doesn't exist
+      kubernetes.core.k8s:
+        api_version: v1
+        kind: Namespace
+        name: "{{ monitoring_namespace }}"
+        state: present
+      when: monitoring_enabled | default(true)
+
+    - name: Log in to Docker Hub
+      community.docker.docker_login:
+        username: "{{ docker_registry_username }}"
+        password: "{{ docker_registry_password }}"
+        reauthorize: yes
+    
+    - name: Build Docker image
+      community.docker.docker_image:
+        build:
+          path: "{{ dockerfile_path }}"
+        name: "{{ docker_registry_username }}/{{ image_name }}:{{ image_tag }}"
+        source: build
+        state: present
+    
+    - name: Push the Docker image to Docker Hub
+      community.docker.docker_image:
+        name: "{{ docker_registry_username }}/{{ image_name }}:{{ image_tag }}"
+        push: yes
+        source: local
+    
+    - name: Apply Kubernetes Deployment with monitoring annotations
+      kubernetes.core.k8s:
+        state: present
+        namespace: "{{ app_namespace }}"
+        src: deployment.yaml
+        kubeconfig: config
+    
+    - name: Apply Kubernetes Service
+      kubernetes.core.k8s:
+        state: present
+        namespace: "{{ app_namespace }}"
+        src: service.yaml
+        kubeconfig: config
+
+    - name: Deploy Prometheus
+      kubernetes.core.k8s:
+        state: present
+        namespace: "{{ monitoring_namespace }}"
+        src: files/prometheus-deployment.yaml
+        kubeconfig: config
+      when: monitoring_enabled | default(true)
+
+    - name: Deploy Prometheus Service
+      kubernetes.core.k8s:
+        state: present
+        namespace: "{{ monitoring_namespace }}"
+        src: files/prometheus-service.yaml
+        kubeconfig: config
+      when: monitoring_enabled | default(true)
+
+    - name: Deploy Node Exporter DaemonSet
+      kubernetes.core.k8s:
+        state: present
+        namespace: "{{ monitoring_namespace }}"
+        src: files/node-exporter-daemonset.yaml
+        kubeconfig: config
+      when: monitoring_enabled | default(true)
+
+    - name: Deploy Grafana
+      kubernetes.core.k8s:
+        state: present
+        namespace: "{{ monitoring_namespace }}"
+        src: files/grafana-deployment.yaml
+        kubeconfig: config
+      when: monitoring_enabled | default(true)
+
+    - name: Deploy Grafana Service
+      kubernetes.core.k8s:
+        state: present
+        namespace: "{{ monitoring_namespace }}"
+        src: files/grafana-service.yaml
+        kubeconfig: config
+      when: monitoring_enabled | default(true)
+
+    - name: Deploy kube-state-metrics
+      kubernetes.core.k8s:
+        state: present
+        namespace: "{{ monitoring_namespace }}"
+        src: files/kube-state-metrics-deployment.yaml
+        kubeconfig: config
+      when: monitoring_enabled | default(true)
+
+    - name: Create ServiceMonitor for country-service
+      kubernetes.core.k8s:
+        state: present
+        namespace: "{{ monitoring_namespace }}"
+        src: files/servicemonitor-countryservice.yaml
+        kubeconfig: config
+      when: monitoring_enabled | default(true)
+
+    - name: Wait for application to be ready
+      kubernetes.core.k8s_info:
+        kind: Pod
+        namespace: "{{ app_namespace }}"
+        label_selectors:
+          - app = country-service
+        kubeconfig: config
+      register: app_pods
+      until: app_pods.resources | length > 0 and app_pods.resources[0].status.phase == "Running"
+      retries: 10
+      delay: 10
+
+    - name: Wait for monitoring stack to be ready
+      kubernetes.core.k8s_info:
+        kind: Pod
+        namespace: "{{ monitoring_namespace }}"
+        label_selectors:
+          - app.kubernetes.io/name in [prometheus, grafana]
+        kubeconfig: config
+      register: monitoring_pods
+      until: monitoring_pods.resources | length >= 2
+      retries: 15
+      delay: 10
+      when: monitoring_enabled | default(true)
+
+    - name: Import Grafana dashboard
+      uri:
+        url: "http://localhost:30009/api/dashboards/db"
+        method: POST
+        headers:
+          Content-Type: "application/json"
+        body: "{{ lookup('file', 'files/grafana-dashboard.json') | to_json }}"
+        status_code: 200, 400
+      when: monitoring_enabled | default(true)
+
+    - name: Verify monitoring endpoints
+      uri:
+        url: "{{ item }}"
+        method: GET
+        status_code: 200
+      loop:
+        - "http://localhost:30008/actuator/health"
+        - "http://localhost:30009/graph"
+        - "http://localhost:30010"
+      ignore_errors: yes
+      when: monitoring_enabled | default(true)
+
+    - name: Display deployment information
+      debug:
+        msg: |
+          🚀 Deployment Completed Successfully!
+          📱 Application URL: http://localhost:30008/getcountries
+          📊 Prometheus: http://localhost:30009
+          📈 Grafana: http://localhost:30010 (admin/admin)
+          🔍 Application Health: http://localhost:30008/actuator/health
