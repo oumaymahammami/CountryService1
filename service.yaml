@@ -1,3 +1,4 @@
+
 apiVersion: v1
 kind: Service
 metadata:
@@ -11,7 +12,7 @@ spec:
     app: country-service
   ports:
     - port: 8080
-      targetPort: 8080  # ← DOIT ÊTRE 8080 pour correspondre au container
+      targetPort: 8080
       nodePort: 30008
       name: http
       protocol: TCP
