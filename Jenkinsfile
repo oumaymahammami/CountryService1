@@ -35,22 +35,22 @@ pipeline {
                         # Compter les lignes de code
                         find src -name "*.java" | xargs wc -l | tail -1 | awk '{print $1}' > line_count.txt
                         LINES_OF_CODE=$(cat line_count.txt)
-                        echo "project_lines_of_code{project=\"country-service\"} $LINES_OF_CODE" > code_metrics.prom
+                        echo "project_lines_of_code{project=\\"country-service\\"} $LINES_OF_CODE" > code_metrics.prom
                         
                         # Compter les tests
                         TEST_COUNT=$(find . -name "*Test.java" | wc -l)
-                        echo "project_test_count{project=\"country-service\"} $TEST_COUNT" >> code_metrics.prom
+                        echo "project_test_count{project=\\"country-service\\"} $TEST_COUNT" >> code_metrics.prom
                         
                         # Métriques de compilation
-                        echo "project_build_status{project=\"country-service\", job=\"$JOB_NAME_SANITIZED\", build=\"$BUILD_NUMBER\"} 1" >> code_metrics.prom
+                        echo "project_build_status{project=\\"country-service\\", job=\\"'$JOB_NAME_SANITIZED'\\", build=\\"'$BUILD_NUMBER'\\"} 1" >> code_metrics.prom
                         
                         echo "📊 Métriques générées:"
                         cat code_metrics.prom
                         
                         # Essayer d'envoyer à Pushgateway seulement s'il est disponible
-                        if curl -s --connect-timeout 5 $PUSHGATEWAY_URL > /dev/null 2>&1; then
+                        if curl -s --connect-timeout 5 '$PUSHGATEWAY_URL' > /dev/null 2>&1; then
                             echo "🚀 Envoi des métriques à Pushgateway..."
-                            curl -X POST --connect-timeout 10 --data-binary @code_metrics.prom "${PUSHGATEWAY_URL}/metrics/job/country_service/instance/${JOB_NAME_SANITIZED}"
+                            curl -X POST --connect-timeout 10 --data-binary @code_metrics.prom "'$PUSHGATEWAY_URL'/metrics/job/country_service/instance/'$JOB_NAME_SANITIZED'"
                         else
                             echo "⚠️ Pushgateway non disponible, métriques sauvegardées localement"
                         fi
@@ -178,9 +178,9 @@ pipeline {
 
                     # Vérifier les services de monitoring
                     echo "📊 Test des services de monitoring..."
-                    curl -s --connect-timeout 10 $PROMETHEUS_URL > /dev/null && echo "✅ Prometheus accessible" || echo "❌ Prometheus non accessible"
-                    curl -s --connect-timeout 10 $GRAFANA_URL > /dev/null && echo "✅ Grafana accessible" || echo "❌ Grafana non accessible"
-                    curl -s --connect-timeout 10 $PUSHGATEWAY_URL > /dev/null && echo "✅ Pushgateway accessible" || echo "❌ Pushgateway non accessible"
+                    curl -s --connect-timeout 10 '$PROMETHEUS_URL' > /dev/null && echo "✅ Prometheus accessible" || echo "❌ Prometheus non accessible"
+                    curl -s --connect-timeout 10 '$GRAFANA_URL' > /dev/null && echo "✅ Grafana accessible" || echo "❌ Grafana non accessible"
+                    curl -s --connect-timeout 10 '$PUSHGATEWAY_URL' > /dev/null && echo "✅ Pushgateway accessible" || echo "❌ Pushgateway non accessible"
                 '''
             }
         }
@@ -202,13 +202,13 @@ pipeline {
                         echo "✅ $REQUEST_COUNT requêtes réussies"
                         
                         # Envoyer des métriques de performance seulement si Pushgateway est disponible
-                        if curl -s --connect-timeout 5 $PUSHGATEWAY_URL > /dev/null; then
-                            cat << EOF | curl -X POST --connect-timeout 10 --data-binary @- "${PUSHGATEWAY_URL}/metrics/job/load_test/instance/${JOB_NAME_SANITIZED}"
-                            # TYPE http_requests_total counter
-                            http_requests_total{job="${JOB_NAME_SANITIZED}", endpoint="getcountries"} $REQUEST_COUNT
-                            # TYPE http_test_duration gauge
-                            http_test_duration{job="${JOB_NAME_SANITIZED}"} 2.0
-                            EOF
+                        if curl -s --connect-timeout 5 '$PUSHGATEWAY_URL' > /dev/null; then
+                            cat << EOF | curl -X POST --connect-timeout 10 --data-binary @- "'$PUSHGATEWAY_URL'/metrics/job/load_test/instance/'$JOB_NAME_SANITIZED'"
+# TYPE http_requests_total counter
+http_requests_total{job="'$JOB_NAME_SANITIZED'", endpoint="getcountries"} '$REQUEST_COUNT'
+# TYPE http_test_duration gauge
+http_test_duration{job="'$JOB_NAME_SANITIZED'"} 2.0
+EOF
                             echo "📤 Métriques de performance envoyées"
                         else
                             echo "⚠️ Pushgateway non disponible pour les métriques de performance"
@@ -228,22 +228,20 @@ pipeline {
                 
                 sh """
                     echo "📤 Envoi des métriques finales du build..."
-                    METRICS_DATA=$(cat << EOF
-                    # TYPE jenkins_build_info gauge
-                    jenkins_build_info{job="${JOB_NAME_SANITIZED}", build_number="${BUILD_NUMBER}", status="${currentBuild.result}"} 1
-                    # TYPE jenkins_build_duration_seconds gauge
-                    jenkins_build_duration_seconds{job="${JOB_NAME_SANITIZED}", build_number="${BUILD_NUMBER}"} ${buildDuration}
-                    # TYPE jenkins_build_status gauge
-                    jenkins_build_status{job="${JOB_NAME_SANITIZED}", build_number="${BUILD_NUMBER}"} ${buildStatus}
-                    EOF
-                    )
                     
-                    # Sauvegarder les métriques dans un fichier
-                    echo "\$METRICS_DATA" > build_metrics.prom
+                    # Créer le fichier de métriques
+                    cat > build_metrics.prom << EOF
+# TYPE jenkins_build_info gauge
+jenkins_build_info{job="${JOB_NAME_SANITIZED}", build_number="${BUILD_NUMBER}", status="${currentBuild.result}"} 1
+# TYPE jenkins_build_duration_seconds gauge
+jenkins_build_duration_seconds{job="${JOB_NAME_SANITIZED}", build_number="${BUILD_NUMBER}"} ${buildDuration}
+# TYPE jenkins_build_status gauge
+jenkins_build_status{job="${JOB_NAME_SANITIZED}", build_number="${BUILD_NUMBER}"} ${buildStatus}
+EOF
                     
                     # Essayer d'envoyer à Pushgateway
-                    if curl -s --connect-timeout 5 $PUSHGATEWAY_URL > /dev/null; then
-                        curl -X POST --connect-timeout 10 --data-binary @build_metrics.prom "${PUSHGATEWAY_URL}/metrics/job/jenkins/instance/${JOB_NAME_SANITIZED}" && echo "✅ Métriques finales envoyées" || echo "❌ Échec envoi métriques finales"
+                    if curl -s --connect-timeout 5 '${PUSHGATEWAY_URL}' > /dev/null; then
+                        curl -X POST --connect-timeout 10 --data-binary @build_metrics.prom '${PUSHGATEWAY_URL}/metrics/job/jenkins/instance/${JOB_NAME_SANITIZED}' && echo "✅ Métriques finales envoyées" || echo "❌ Échec envoi métriques finales"
                     else
                         echo "⚠️ Pushgateway non disponible pour les métriques finales"
                         echo "📄 Métriques sauvegardées:"
