@@ -22,24 +22,21 @@ spec:
     spec:
       containers:
       - name: country-service
-        image: jamina2385/my-country-service:v1
+        image: oumayma511/country-service:latest  # ← UTILISER LA BONNE IMAGE
+        imagePullPolicy: Always
         ports:
         - containerPort: 8080
         env:
         - name: SPRING_PROFILES_ACTIVE
           value: "prod"
+        - name: SERVER_PORT
+          value: "8080"
         - name: MANAGEMENT_ENDPOINTS_WEB_EXPOSURE_INCLUDE
           value: "health,info,metrics,prometheus"
         - name: MANAGEMENT_ENDPOINT_PROMETHEUS_ENABLED
           value: "true"
-        - name: MANAGEMENT_METRICS_EXPORT_PROMETHEUS_ENABLED
-          value: "true"
         - name: MANAGEMENT_ENDPOINT_HEALTH_SHOW-DETAILS
           value: "always"
-        - name: MANAGEMENT_ENDPOINTS_WEB_CORS_ALLOWED-ORIGINS
-          value: "*"
-        - name: MANAGEMENT_ENDPOINTS_WEB_CORS_ALLOWED-METHODS
-          value: "GET,POST,OPTIONS"
         resources:
           requests:
             memory: "256Mi"
@@ -51,7 +48,7 @@ spec:
           httpGet:
             path: /actuator/health
             port: 8080
-          initialDelaySeconds: 30
+          initialDelaySeconds: 90  # ← AUGMENTER pour Spring Boot
           periodSeconds: 10
           timeoutSeconds: 5
           failureThreshold: 3
@@ -59,11 +56,7 @@ spec:
           httpGet:
             path: /actuator/health
             port: 8080
-          initialDelaySeconds: 20
+          initialDelaySeconds: 60  # ← AUGMENTER pour Spring Boot
           periodSeconds: 5
           timeoutSeconds: 3
           failureThreshold: 3
-        lifecycle:
-          preStop:
-            exec:
-              command: ["sh", "-c", "sleep 10"]
