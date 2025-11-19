@@ -37,28 +37,36 @@ spec:
           value: "true"
         - name: MANAGEMENT_ENDPOINT_HEALTH_SHOW-DETAILS
           value: "always"
-        - name: SPRING_SECURITY_BASIC_ENABLE
-          value: "false"
+        - name: MANAGEMENT_SERVER_PORT
+          value: "8080"
+        - name: LOGGING_LEVEL_COM_DEMO_COUNTRYSERVICE
+          value: "DEBUG"
         resources:
           requests:
-            memory: "256Mi"
+            memory: "512Mi"  # Augmenté
             cpu: "250m"
           limits:
-            memory: "512Mi"
+            memory: "1Gi"    # Augmenté
             cpu: "500m"
         livenessProbe:
           httpGet:
-            path: /actuator/health
+            path: /actuator/health/liveness
             port: 8080
-          initialDelaySeconds: 180  # Augmenté à 180s
+            scheme: HTTP
+          initialDelaySeconds: 180  # 3 minutes
           periodSeconds: 15
           timeoutSeconds: 10
           failureThreshold: 3
         readinessProbe:
           httpGet:
-            path: /actuator/health
+            path: /actuator/health/readiness
             port: 8080
-          initialDelaySeconds: 120  # Augmenté à 120s
+            scheme: HTTP
+          initialDelaySeconds: 120  # 2 minutes
           periodSeconds: 10
           timeoutSeconds: 8
           failureThreshold: 3
+        lifecycle:
+          preStop:
+            exec:
+              command: ["sh", "-c", "sleep 30"]
