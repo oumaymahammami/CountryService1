@@ -1,9 +1,8 @@
 ---
-- name: Build and Deploy Docker Image to Kubernetes with Monitoring
+- name: Build and Deploy to Docker Desktop Kubernetes
   hosts: localhost
   connection: local
   
-  # IMPORTANT: Utiliser le vault pour les secrets
   vars_files:
     - vault.yml
   
@@ -13,21 +12,19 @@
     dockerfile_path: '.'
     monitoring_namespace: monitoring
     app_namespace: jenkins
-    monitoring_enabled: true
 
   tasks:
-    - name: Check Kubernetes access
+    - name: Verify Kubernetes access
       kubernetes.core.k8s_info:
-        kind: Namespace
+        kind: Node
       register: k8s_check
-      ignore_errors: yes
 
-    - name: Create application namespace
-      kubernetes.core.k8s:
-        api_version: v1
-        kind: Namespace
-        name: "{{ app_namespace }}"
-        state: present
+    - name: Display Kubernetes info
+      debug:
+        msg: |
+          ✅ Kubernetes accessible!
+          Cluster: {{ k8s_check.resources[0].metadata.name }}
+          Version: {{ k8s_check.resources[0].status.nodeInfo.kubeletVersion }}
 
     - name: Create monitoring namespace
       kubernetes.core.k8s:
@@ -35,7 +32,6 @@
         kind: Namespace
         name: "{{ monitoring_namespace }}"
         state: present
-      when: monitoring_enabled
 
     - name: Log in to Docker Hub
       community.docker.docker_login:
@@ -57,7 +53,7 @@
         push: yes
         source: local
     
-    - name: Apply Kubernetes Deployment
+    - name: Deploy application to Kubernetes
       kubernetes.core.k8s:
         state: present
         namespace: "{{ app_namespace }}"
@@ -82,7 +78,6 @@
                   prometheus.io/scrape: "true"
                   prometheus.io/path: "/actuator/prometheus"
                   prometheus.io/port: "8080"
-                  prometheus.io/scheme: "http"
               spec:
                 containers:
                 - name: country-service
@@ -117,8 +112,8 @@
                       port: 8080
                     initialDelaySeconds: 20
                     periodSeconds: 5
-    
-    - name: Apply Kubernetes Service
+
+    - name: Expose application with Service
       kubernetes.core.k8s:
         state: present
         namespace: "{{ app_namespace }}"
@@ -128,8 +123,6 @@
           metadata:
             name: country-service
             namespace: "{{ app_namespace }}"
-            labels:
-              app: country-service
           spec:
             type: NodePort
             selector:
@@ -138,8 +131,6 @@
             - port: 8080
               targetPort: 8080
               nodePort: 30008
-              name: http
-              protocol: TCP
 
     - name: Deploy Prometheus
       kubernetes.core.k8s:
@@ -172,9 +163,8 @@
                   - '--config.file=/etc/prometheus/prometheus.yml'
                   - '--web.enable-lifecycle'
                   - '--storage.tsdb.retention.time=200h'
-      when: monitoring_enabled
 
-    - name: Deploy Prometheus Service
+    - name: Expose Prometheus with Service
       kubernetes.core.k8s:
         state: present
         namespace: "{{ monitoring_namespace }}"
@@ -192,7 +182,6 @@
               nodePort: 30009
             selector:
               app: prometheus
-      when: monitoring_enabled
 
     - name: Deploy Grafana
       kubernetes.core.k8s:
@@ -224,9 +213,8 @@
                   env:
                   - name: GF_SECURITY_ADMIN_PASSWORD
                     value: "admin"
-      when: monitoring_enabled
 
-    - name: Deploy Grafana Service
+    - name: Expose Grafana with Service
       kubernetes.core.k8s:
         state: present
         namespace: "{{ monitoring_namespace }}"
@@ -244,7 +232,6 @@
               nodePort: 30010
             selector:
               app: grafana
-      when: monitoring_enabled
 
     - name: Wait for application to be ready
       kubernetes.core.k8s_info:
@@ -254,7 +241,7 @@
           - app = country-service
       register: app_pods
       until: app_pods.resources | length > 0 and app_pods.resources[0].status.phase == "Running"
-      retries: 10
+      retries: 12
       delay: 10
 
     - name: Wait for monitoring stack to be ready
@@ -267,51 +254,22 @@
       until: monitoring_pods.resources | length >= 2
       retries: 15
       delay: 10
-      when: monitoring_enabled
-
-    - name: Wait for services to be accessible
-      wait_for:
-        host: localhost
-        port: "{{ item.port }}"
-        timeout: 30
-      loop:
-        - { name: "application", port: 30008 }
-        - { name: "prometheus", port: 30009 }
-        - { name: "grafana", port: 30010 }
-      when: monitoring_enabled
-
-    - name: Configure Grafana datasource
-      uri:
-        url: "http://localhost:30010/api/datasources"
-        method: POST
-        headers:
-          Content-Type: "application/json"
-        body:
-          name: "Prometheus"
-          type: "prometheus"
-          url: "http://prometheus-service.monitoring:9090"
-          access: "proxy"
-          basicAuth: false
-        status_code: 200, 409
-      when: monitoring_enabled
-      register: grafana_datasource
-      retries: 5
-      delay: 5
 
     - name: Display deployment information
       debug:
         msg: |
-          🚀 Deployment Completed Successfully!
-          📱 Application: http://localhost:30008/getcountries
-          📊 Prometheus: http://localhost:30009
-          📈 Grafana: http://localhost:30010 (admin/admin)
-          🔍 Application Health: http://localhost:30008/actuator/health
+          🎉 DÉPLOIEMENT RÉUSSI SUR DOCKER DESKTOP KUBERNETES!
           
-          Kubernetes Resources:
-          📦 Application Namespace: {{ app_namespace }}
-          📊 Monitoring Namespace: {{ monitoring_namespace }}
+          📱 VOTRE APPLICATION:
+          → URL: http://localhost:30008/getcountries
+          → Santé: http://localhost:30008/actuator/health
+          → Métriques: http://localhost:30008/actuator/prometheus
           
-          Commands:
-          🔍 Check pods: kubectl get pods -n {{ app_namespace }} && kubectl get pods -n {{ monitoring_namespace }}
-          🔍 Check services: kubectl get svc -A
-          📋 Check logs: kubectl logs -n {{ app_namespace }} -l app=country-service
+          📊 VOTRE SURVEILLANCE:
+          → Prometheus: http://localhost:30009
+          → Grafana: http://localhost:30010 (admin/admin)
+          
+          🔍 VÉRIFICATION:
+          kubectl get pods -n {{ app_namespace }}
+          kubectl get pods -n {{ monitoring_namespace }}
+          kubectl get svc -A | grep -E "(30008|30009|30010)"
