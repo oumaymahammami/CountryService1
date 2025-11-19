@@ -1,4 +1,3 @@
-
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -23,7 +22,7 @@ spec:
     spec:
       containers:
       - name: country-service
-        image: oumayma511/country-service:latest  # ← VOTRE IMAGE
+        image: oumayma511/country-service:latest
         imagePullPolicy: Always
         ports:
         - containerPort: 8080
@@ -51,15 +50,15 @@ spec:
           httpGet:
             path: /actuator/health
             port: 8080
-          initialDelaySeconds: 120
-          periodSeconds: 10
-          timeoutSeconds: 5
+          initialDelaySeconds: 180  # Augmenté à 180s
+          periodSeconds: 15
+          timeoutSeconds: 10
           failureThreshold: 3
         readinessProbe:
           httpGet:
             path: /actuator/health
             port: 8080
-          initialDelaySeconds: 90
-          periodSeconds: 5
-          timeoutSeconds: 3
+          initialDelaySeconds: 120  # Augmenté à 120s
+          periodSeconds: 10
+          timeoutSeconds: 8
           failureThreshold: 3
