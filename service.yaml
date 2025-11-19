@@ -10,8 +10,8 @@ spec:
   selector:
     app: country-service
   ports:
-    - port: 8080
-      targetPort: 8080
-      nodePort: 30008
+    - port: 8080        # Port interne du service (peut rester 8080)
+      targetPort: 8082  # ← CORRIGER ICI : port du container
+      nodePort: 30008   # Port externe d'accès
       name: http
       protocol: TCP
