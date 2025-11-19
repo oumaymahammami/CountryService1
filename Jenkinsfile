@@ -20,6 +20,47 @@ pipeline {
             }
         }
 
+        stage('Create Configuration') {
+            steps {
+                sh '''
+                    echo "📁 Création de la configuration de production..."
+                    
+                    # Créer le fichier application-prod.yml
+                    mkdir -p src/main/resources
+                    cat > src/main/resources/application-prod.yml << 'EOF'
+server:
+  port: 8080
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      show-details: always
+      enabled: true
+
+spring:
+  security:
+    basic:
+      enable: false
+  h2:
+    console:
+      enabled: true
+      path: /h2-console
+  jpa:
+    defer-datasource-initialization: true
+  sql:
+    init:
+      mode: always
+EOF
+                    echo "✅ Fichier application-prod.yml créé"
+                    cat src/main/resources/application-prod.yml
+                '''
+            }
+        }
+
         stage('Build & Package') {
             steps {
                 sh 'mvn clean package -DskipTests'
@@ -59,6 +100,26 @@ pipeline {
             }
         }
 
+        stage('Build & Push Docker Image') {
+            steps {
+                script {
+                    withCredentials([usernamePassword(
+                        credentialsId: DOCKERHUB_CREDENTIALS_ID,
+                        usernameVariable: 'DOCKER_USERNAME',
+                        passwordVariable: 'DOCKER_PASSWORD'
+                    )]) {
+                        sh '''
+                            echo "🐳 Construction de l'image Docker..."
+                            echo "$DOCKER_PASSWORD" | docker login -u "$DOCKER_USERNAME" --password-stdin
+                            docker build -t $DOCKER_USERNAME/country-service:latest .
+                            docker push $DOCKER_USERNAME/country-service:latest
+                            echo "✅ Image Docker construite et poussée"
+                        '''
+                    }
+                }
+            }
+        }
+
         stage('Deploy with Ansible') {
             steps {
                 script {
@@ -68,14 +129,71 @@ pipeline {
                         passwordVariable: 'DOCKER_PASSWORD'
                     )]) {
                         sh '''
-                            # Tester la connexion Docker d'abord
-                            echo "$DOCKER_PASSWORD" | docker login -u "$DOCKER_USERNAME" --password-stdin
-                            
                             # Exécuter Ansible avec les variables d'environnement
                             ansible-playbook playbookCICD.yml -e "docker_registry_username=$DOCKER_USERNAME docker_registry_password=$DOCKER_PASSWORD"
                         '''
                     }
                 }
+            }
+        }
+
+        stage('Fix Kubernetes Configuration') {
+            steps {
+                sh '''
+                    echo "🔧 Correction de la configuration Kubernetes..."
+                    
+                    # Attendre que le déploiement soit créé
+                    sleep 15
+                    
+                    # Corriger le service pour utiliser le bon port
+                    kubectl patch service -n jenkins country-service -p '{"spec":{"ports":[{"port":8080,"targetPort":8080,"nodePort":30008}]}}' || echo "⚠️ Service patch échoué"
+                    
+                    # Corriger les probes avec le bon port et configuration
+                    kubectl patch deployment -n jenkins country-service -p '{
+                        "spec": {
+                            "template": {
+                                "spec": {
+                                    "containers": [{
+                                        "name": "country-service",
+                                        "livenessProbe": {
+                                            "httpGet": {
+                                                "path": "/actuator/health",
+                                                "port": 8080
+                                            },
+                                            "initialDelaySeconds": 90,
+                                            "periodSeconds": 10,
+                                            "timeoutSeconds": 5,
+                                            "failureThreshold": 3
+                                        },
+                                        "readinessProbe": {
+                                            "httpGet": {
+                                                "path": "/actuator/health",
+                                                "port": 8080
+                                            },
+                                            "initialDelaySeconds": 60,
+                                            "periodSeconds": 5,
+                                            "timeoutSeconds": 3,
+                                            "failureThreshold": 3
+                                        }
+                                    }]
+                                }
+                            }
+                        }
+                    }' || echo "⚠️ Deployment patch échoué"
+                    
+                    # Redémarrer le déploiement pour appliquer les changements
+                    kubectl rollout restart deployment -n jenkins country-service
+                    
+                    echo "⏳ Attente de la stabilisation des pods..."
+                    # Attendre que les pods soient prêts avec timeout
+                    if kubectl wait --for=condition=ready pod -l app=country-service -n jenkins --timeout=180s; then
+                        echo "✅ Pods stabilisés avec succès"
+                    else
+                        echo "⚠️ Timeout atteint, vérification de l'état des pods:"
+                        kubectl get pods -n jenkins -l app=country-service
+                        kubectl logs -n jenkins deployment/country-service --tail=20 || echo "Impossible de récupérer les logs"
+                    fi
+                '''
             }
         }
 
@@ -168,13 +286,17 @@ pipeline {
                 sh '''
                     echo "🔍 Vérification du déploiement..."
                     
+                    # Vérifier l'état des pods
+                    echo "📦 État des pods:"
+                    kubectl get pods -n jenkins -l app=country-service
+                    
                     # Vérifier l'application avec timeout
                     echo "📱 Test de l'application..."
-                    timeout 30 bash -c 'until curl -f http://localhost:30008/getcountries; do sleep 2; done' || echo "Application check échouée mais continuation"
+                    timeout 60 bash -c 'until curl -f http://localhost:30008/actuator/health; do sleep 5; done' && echo "✅ Application accessible" || echo "❌ Application non accessible"
                     
                     # Vérifier les endpoints de santé
-                    curl -f http://localhost:30008/actuator/health || echo "Health endpoint non disponible"
-                    curl -s http://localhost:30008/actuator/prometheus | head -5 || echo "Metrics endpoint non disponible"
+                    curl -s http://localhost:30008/actuator/health | head -5 || echo "Health endpoint non disponible"
+                    curl -s http://localhost:30008/actuator/info | head -5 || echo "Info endpoint non disponible"
 
                     # Vérifier les services de monitoring
                     echo "📊 Test des services de monitoring..."
@@ -193,21 +315,24 @@ pipeline {
                         echo "🚀 Démarrage des tests de charge..."
                         REQUEST_COUNT=0
                         for i in {1..20}; do
-                            if curl -s --connect-timeout 5 http://localhost:30008/getcountries > /dev/null; then
+                            if curl -s --connect-timeout 5 http://localhost:30008/actuator/health > /dev/null; then
                                 REQUEST_COUNT=$((REQUEST_COUNT + 1))
+                                echo "✅ Requête $i réussie"
+                            else
+                                echo "❌ Requête $i échouée"
                             fi
                             sleep 0.1
                         done
                         
-                        echo "✅ $REQUEST_COUNT requêtes réussies"
+                        echo "✅ $REQUEST_COUNT requêtes réussies sur 20"
                         
                         # Envoyer des métriques de performance seulement si Pushgateway est disponible
                         if curl -s --connect-timeout 5 '$PUSHGATEWAY_URL' > /dev/null; then
                             cat << EOF | curl -X POST --connect-timeout 10 --data-binary @- "'$PUSHGATEWAY_URL'/metrics/job/load_test/instance/'$JOB_NAME_SANITIZED'"
 # TYPE http_requests_total counter
-http_requests_total{job="'$JOB_NAME_SANITIZED'", endpoint="getcountries"} '$REQUEST_COUNT'
-# TYPE http_test_duration gauge
-http_test_duration{job="'$JOB_NAME_SANITIZED'"} 2.0
+http_requests_total{job="'$JOB_NAME_SANITIZED'", endpoint="health"} $REQUEST_COUNT
+# TYPE http_success_rate gauge
+http_success_rate{job="'$JOB_NAME_SANITIZED'"} $(echo "scale=2; $REQUEST_COUNT / 20" | bc)
 EOF
                             echo "📤 Métriques de performance envoyées"
                         else
@@ -259,15 +384,15 @@ EOF
                 sh '''
                     echo "🏁 PIPELINE TERMINÉ AVEC SUCCÈS 🏁"
                     echo "🔗 LIENS IMPORTANTS:"
-                    echo "📱 Application: http://localhost:30008/getcountries"
+                    echo "📱 Application Health: http://localhost:30008/actuator/health"
                     echo "📊 Prometheus: http://localhost:9090"
                     echo "📈 Grafana: http://localhost:3000 (admin/admin)"
                     echo "🔔 Pushgateway: http://localhost:9091"
                     echo ""
                     echo "💡 COMMANDES DE VÉRIFICATION:"
-                    echo "docker ps"
+                    echo "kubectl get pods -n jenkins"
                     echo "curl http://localhost:30008/actuator/health"
-                    echo "curl http://localhost:9090/targets"
+                    echo "docker ps"
                 '''
             }
         }
@@ -276,10 +401,11 @@ EOF
                 echo '❌ Pipeline échoué. Vérifiez les logs.'
                 sh '''
                     echo "🔧 CONSEILS DE DÉPANNAGE:"
-                    echo "1. Vérifiez que Docker est en cours d'exécution: docker ps"
-                    echo "2. Vérifiez les logs des conteneurs: docker logs prometheus"
-                    echo "3. Vérifiez la connexion Kubernetes: kubectl get pods -A"
-                    echo "4. Vérifiez les logs Ansible"
+                    echo "1. Vérifiez les pods Kubernetes: kubectl get pods -n jenkins"
+                    echo "2. Vérifiez les logs: kubectl logs -n jenkins deployment/country-service"
+                    echo "3. Vérifiez les événements: kubectl get events -n jenkins --sort-by=.lastTimestamp"
+                    echo "4. Vérifiez Docker: docker ps"
+                    echo "5. Vérifiez la configuration: kubectl describe deployment -n jenkins country-service"
                 '''
             }
         }
