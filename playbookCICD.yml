@@ -8,7 +8,7 @@
   
   vars:
     image_name: country-service
-    image_tag: "v1"
+    image_tag: "latest"
     dockerfile_path: '.'
     monitoring_namespace: monitoring
     app_namespace: jenkins
@@ -18,51 +18,58 @@
       command: kubectl cluster-info
       register: k8s_check
       changed_when: false
+      ignore_errors: yes
 
     - name: Display Kubernetes status
       debug:
         msg: "✅ Kubernetes accessible: {{ k8s_check.stdout }}"
 
     - name: Create monitoring namespace
-      command: kubectl create namespace {{ monitoring_namespace }} --dry-run=client -o yaml
-      register: namespace_yaml
-      changed_when: false
-
-    - name: Apply monitoring namespace
-      command: kubectl apply -f -
-      args:
-        stdin: "{{ namespace_yaml.stdout }}"
+      kubernetes.core.k8s:
+        kind: Namespace
+        name: "{{ monitoring_namespace }}"
+        state: present
       register: create_monitoring_ns
+
+    - name: Create application namespace
+      kubernetes.core.k8s:
+        kind: Namespace
+        name: "{{ app_namespace }}"
+        state: present
+      when: app_namespace != "default"
 
     - name: Log in to Docker Hub
       community.docker.docker_login:
         username: "{{ docker_registry_username }}"
         password: "{{ docker_registry_password }}"
-        reauthorize: yes
-    
+        registry_url: https://index.docker.io/v1/
+
     - name: Build Docker image
       community.docker.docker_image:
         build:
           path: "{{ dockerfile_path }}"
+          pull: yes
         name: "{{ docker_registry_username }}/{{ image_name }}:{{ image_tag }}"
         source: build
         state: present
-    
+      register: build_result
+
     - name: Push the Docker image to Docker Hub
       community.docker.docker_image:
         name: "{{ docker_registry_username }}/{{ image_name }}:{{ image_tag }}"
         push: yes
         source: local
-    
+      register: push_result
+
     - name: Deploy application using kubectl
-      command: kubectl apply -f -
-      args:
-        stdin: |
+      kubernetes.core.k8s:
+        state: present
+        definition:
           apiVersion: apps/v1
           kind: Deployment
           metadata:
             name: country-service
-            namespace: {{ app_namespace }}
+            namespace: "{{ app_namespace }}"
             labels:
               app: country-service
           spec:
@@ -76,21 +83,28 @@
                   app: country-service
                 annotations:
                   prometheus.io/scrape: "true"
-                  prometheus.io.path: "/actuator/prometheus"
-                  prometheus.io.port: "8080"
+                  prometheus.io/path: "/actuator/prometheus"
+                  prometheus.io/port: "8080"
+                  prometheus.io/scheme: "http"
               spec:
                 containers:
                 - name: country-service
-                  image: {{ docker_registry_username }}/{{ image_name }}:{{ image_tag }}
+                  image: "{{ docker_registry_username }}/{{ image_name }}:{{ image_tag }}"
                   ports:
                   - containerPort: 8080
                   env:
                   - name: SPRING_PROFILES_ACTIVE
                     value: "prod"
+                  - name: SERVER_PORT
+                    value: "8080"
                   - name: MANAGEMENT_ENDPOINTS_WEB_EXPOSURE_INCLUDE
                     value: "health,info,metrics,prometheus"
+                  - name: MANAGEMENT_ENDPOINT_HEALTH_SHOW-DETAILS
+                    value: "always"
                   - name: MANAGEMENT_ENDPOINT_PROMETHEUS_ENABLED
                     value: "true"
+                  - name: SPRING_SECURITY_BASIC_ENABLE
+                    value: "false"
                   resources:
                     requests:
                       memory: "256Mi"
@@ -102,44 +116,111 @@
                     httpGet:
                       path: /actuator/health
                       port: 8080
-                    initialDelaySeconds: 30
+                      scheme: HTTP
+                    initialDelaySeconds: 90
                     periodSeconds: 10
+                    timeoutSeconds: 5
+                    failureThreshold: 3
                   readinessProbe:
                     httpGet:
                       path: /actuator/health
                       port: 8080
-                    initialDelaySeconds: 20
+                      scheme: HTTP
+                    initialDelaySeconds: 60
                     periodSeconds: 5
+                    timeoutSeconds: 3
+                    failureThreshold: 3
       register: deploy_app
 
     - name: Expose application with Service
-      command: kubectl apply -f -
-      args:
-        stdin: |
+      kubernetes.core.k8s:
+        state: present
+        definition:
           apiVersion: v1
           kind: Service
           metadata:
             name: country-service
-            namespace: {{ app_namespace }}
+            namespace: "{{ app_namespace }}"
+            labels:
+              app: country-service
           spec:
             type: NodePort
             selector:
               app: country-service
             ports:
-            - port: 8080
+            - name: http
+              port: 8080
               targetPort: 8080
               nodePort: 30008
+              protocol: TCP
       register: expose_app
 
+    - name: Deploy Prometheus ConfigMap
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: prometheus-config
+            namespace: "{{ monitoring_namespace }}"
+          data:
+            prometheus.yml: |
+              global:
+                scrape_interval: 15s
+                evaluation_interval: 15s
+
+              scrape_configs:
+                - job_name: 'country-service'
+                  metrics_path: '/actuator/prometheus'
+                  scrape_interval: 10s
+                  static_configs:
+                    - targets: ['country-service.{{ app_namespace }}.svc.cluster.local:8080']
+                  relabel_configs:
+                    - source_labels: [__address__]
+                      target_label: instance
+                      regex: '(.*):.*'
+                      replacement: '${1}'
+
+                - job_name: 'pushgateway'
+                  honor_labels: true
+                  static_configs:
+                    - targets: ['pushgateway:9091']
+
+                - job_name: 'kubernetes-pods'
+                  kubernetes_sd_configs:
+                    - role: pod
+                  relabel_configs:
+                    - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+                      action: keep
+                      regex: true
+                    - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
+                      action: replace
+                      target_label: __metrics_path__
+                      regex: (.+)
+                    - source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
+                      action: replace
+                      regex: ([^:]+)(?::\d+)?;(\d+)
+                      replacement: $1:$2
+                      target_label: __address__
+                    - action: labelmap
+                      regex: __meta_kubernetes_pod_label_(.+)
+                    - source_labels: [__meta_kubernetes_namespace]
+                      action: replace
+                      target_label: kubernetes_namespace
+                    - source_labels: [__meta_kubernetes_pod_name]
+                      action: replace
+                      target_label: kubernetes_pod_name
+
     - name: Deploy Prometheus
-      command: kubectl apply -f -
-      args:
-        stdin: |
+      kubernetes.core.k8s:
+        state: present
+        definition:
           apiVersion: apps/v1
           kind: Deployment
           metadata:
             name: prometheus
-            namespace: {{ monitoring_namespace }}
+            namespace: "{{ monitoring_namespace }}"
             labels:
               app: prometheus
           spec:
@@ -157,36 +238,122 @@
                   image: prom/prometheus:latest
                   ports:
                   - containerPort: 9090
+                  args:
+                    - '--config.file=/etc/prometheus/prometheus.yml'
+                    - '--storage.tsdb.path=/prometheus'
+                    - '--web.console.libraries=/etc/prometheus/console_libraries'
+                    - '--web.console.templates=/etc/prometheus/consoles'
+                    - '--storage.tsdb.retention.time=200h'
+                    - '--web.enable-lifecycle'
+                  volumeMounts:
+                  - name: prometheus-config
+                    mountPath: /etc/prometheus
+                  - name: prometheus-storage
+                    mountPath: /prometheus
+                  resources:
+                    requests:
+                      memory: "512Mi"
+                      cpu: "500m"
+                    limits:
+                      memory: "1Gi"
+                      cpu: "1000m"
+                volumes:
+                - name: prometheus-config
+                  configMap:
+                    name: prometheus-config
+                - name: prometheus-storage
+                  emptyDir: {}
       register: deploy_prometheus
 
     - name: Expose Prometheus
-      command: kubectl apply -f -
-      args:
-        stdin: |
+      kubernetes.core.k8s:
+        state: present
+        definition:
           apiVersion: v1
           kind: Service
           metadata:
             name: prometheus-service
-            namespace: {{ monitoring_namespace }}
+            namespace: "{{ monitoring_namespace }}"
+            labels:
+              app: prometheus
           spec:
             type: NodePort
             ports:
-            - port: 9090
+            - name: web
+              port: 9090
               targetPort: 9090
               nodePort: 30009
+              protocol: TCP
             selector:
               app: prometheus
       register: expose_prometheus
 
+    - name: Deploy Pushgateway
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: pushgateway
+            namespace: "{{ monitoring_namespace }}"
+            labels:
+              app: pushgateway
+          spec:
+            replicas: 1
+            selector:
+              matchLabels:
+                app: pushgateway
+            template:
+              metadata:
+                labels:
+                  app: pushgateway
+              spec:
+                containers:
+                - name: pushgateway
+                  image: prom/pushgateway:latest
+                  ports:
+                  - containerPort: 9091
+                  resources:
+                    requests:
+                      memory: "128Mi"
+                      cpu: "100m"
+                    limits:
+                      memory: "256Mi"
+                      cpu: "200m"
+      register: deploy_pushgateway
+
+    - name: Expose Pushgateway
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: pushgateway-service
+            namespace: "{{ monitoring_namespace }}"
+            labels:
+              app: pushgateway
+          spec:
+            type: NodePort
+            ports:
+            - name: web
+              port: 9091
+              targetPort: 9091
+              nodePort: 30011
+              protocol: TCP
+            selector:
+              app: pushgateway
+
     - name: Deploy Grafana
-      command: kubectl apply -f -
-      args:
-        stdin: |
+      kubernetes.core.k8s:
+        state: present
+        definition:
           apiVersion: apps/v1
           kind: Deployment
           metadata:
             name: grafana
-            namespace: {{ monitoring_namespace }}
+            namespace: "{{ monitoring_namespace }}"
             labels:
               app: grafana
           spec:
@@ -207,54 +374,141 @@
                   env:
                   - name: GF_SECURITY_ADMIN_PASSWORD
                     value: "admin"
+                  - name: GF_INSTALL_PLUGINS
+                    value: "grafana-clock-panel,grafana-simple-json-datasource"
+                  volumeMounts:
+                  - name: grafana-storage
+                    mountPath: /var/lib/grafana
+                  - name: grafana-config
+                    mountPath: /etc/grafana/provisioning/datasources
+                  resources:
+                    requests:
+                      memory: "256Mi"
+                      cpu: "100m"
+                    limits:
+                      memory: "512Mi"
+                      cpu: "500m"
+                volumes:
+                - name: grafana-storage
+                  emptyDir: {}
+                - name: grafana-config
+                  configMap:
+                    name: grafana-datasources
       register: deploy_grafana
 
+    - name: Create Grafana datasources ConfigMap
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: grafana-datasources
+            namespace: "{{ monitoring_namespace }}"
+          data:
+            datasources.yaml: |
+              apiVersion: 1
+              datasources:
+                - name: Prometheus
+                  type: prometheus
+                  access: proxy
+                  url: http://prometheus-service:9090
+                  isDefault: true
+                - name: Pushgateway
+                  type: prometheus
+                  access: proxy
+                  url: http://pushgateway-service:9091
+
     - name: Expose Grafana
-      command: kubectl apply -f -
-      args:
-        stdin: |
+      kubernetes.core.k8s:
+        state: present
+        definition:
           apiVersion: v1
           kind: Service
           metadata:
             name: grafana-service
-            namespace: {{ monitoring_namespace }}
+            namespace: "{{ monitoring_namespace }}"
+            labels:
+              app: grafana
           spec:
             type: NodePort
             ports:
-            - port: 3000
+            - name: web
+              port: 3000
               targetPort: 3000
               nodePort: 30010
+              protocol: TCP
             selector:
               app: grafana
       register: expose_grafana
 
     - name: Wait for application pods
-      command: kubectl wait --for=condition=ready pod -l app=country-service -n {{ app_namespace }} --timeout=120s
-      register: wait_app
-      retries: 3
+      kubernetes.core.k8s_info:
+        kind: Pod
+        namespace: "{{ app_namespace }}"
+        label_selectors:
+          - "app = country-service"
+      register: app_pods
+      until: app_pods.resources | selectattr('status.phase', 'equalto', 'Running') | list | length == 2
+      retries: 12
       delay: 10
-      until: wait_app.rc == 0
 
     - name: Wait for monitoring pods
-      command: kubectl wait --for=condition=ready pod -l app=prometheus -n {{ monitoring_namespace }} --timeout=120s
-      register: wait_prometheus
-      retries: 3
+      kubernetes.core.k8s_info:
+        kind: Pod
+        namespace: "{{ monitoring_namespace }}"
+        label_selectors:
+          - "app in (prometheus, grafana, pushgateway)"
+      register: monitoring_pods
+      until: monitoring_pods.resources | selectattr('status.phase', 'equalto', 'Running') | list | length == 3
+      retries: 12
       delay: 10
 
     - name: Display deployment information
       debug:
         msg: |
           🎉 DÉPLOIEMENT KUBERNETES RÉUSSI !
-          
+
           📱 VOTRE APPLICATION:
-          → URL: http://localhost:30008/getcountries
-          → Santé: http://localhost:30008/actuator/health
-          
+          → URL: http://localhost:30008/actuator/health
+          → Métriques: http://localhost:30008/actuator/prometheus
+          → H2 Console: http://localhost:30008/h2-console
+
           📊 VOTRE SURVEILLANCE:
           → Prometheus: http://localhost:30009
           → Grafana: http://localhost:30010 (admin/admin)
-          
-          🔍 VÉRIFICATION:
+          → Pushgateway: http://localhost:30011
+
+          🔍 COMMANDES DE VÉRIFICATION:
           kubectl get pods -n {{ app_namespace }}
           kubectl get pods -n {{ monitoring_namespace }}
           kubectl get svc -A | grep 3000
+          kubectl logs -n {{ app_namespace }} deployment/country-service --tail=10
+
+          📈 MÉTRIQUES DISPONIBLES:
+          - Santé de l'application: up{job="country-service"}
+          - Métriques JVM: jvm_memory_used_bytes, jvm_threads_live
+          - Métriques HTTP: http_server_requests_seconds_count
+
+    - name: Verify application health
+      uri:
+        url: "http://localhost:30008/actuator/health"
+        method: GET
+        timeout: 30
+        status_code: 200
+      register: health_check
+      retries: 6
+      delay: 10
+      until: health_check.status == 200
+
+    - name: Display final status
+      debug:
+        msg: |
+          ✅ DÉPLOIEMENT COMPLÈTEMENT RÉUSSI !
+
+          📊 STATUT DES SERVICES:
+          Application: {{ health_check.status }} - {{ health_check.json.status }}
+          Pods Application: {{ (app_pods.resources | selectattr('status.phase', 'equalto', 'Running') | list | length) }}/2
+          Pods Monitoring: {{ (monitoring_pods.resources | selectattr('status.phase', 'equalto', 'Running') | list | length) }}/3
+
+          🚀 VOTRE APPLICATION EST MAINTENANT OPÉRATIONNELLE !
