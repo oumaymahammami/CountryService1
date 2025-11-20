@@ -25,7 +25,7 @@ pipeline {
                 sh '''
                     echo "📁 Création de la configuration de production..."
                     
-                    # Créer le fichier application-prod.yml
+                    # Créer le fichier application-prod.yml avec la configuration COMPLÈTE
                     mkdir -p src/main/resources
                     cat > src/main/resources/application-prod.yml << 'EOF'
 server:
@@ -35,10 +35,27 @@ management:
   endpoints:
     web:
       exposure:
-        include: health,info,metrics
+        include: health,info,metrics,prometheus  # ✅ PROMETHEUS AJOUTÉ
+      base-path: /actuator
+    enabled-by-default: true
   endpoint:
     health:
       show-details: always
+      enabled: true
+      show-components: always
+      group:
+        readiness:
+          include: readinessState,db,diskSpace
+        liveness:
+          include: livenessState,ping
+    metrics:
+      enabled: true
+    prometheus:
+      enabled: true
+  health:
+    livenessstate:
+      enabled: true
+    readinessstate:
       enabled: true
 
 spring:
@@ -49,13 +66,31 @@ spring:
     console:
       enabled: true
       path: /h2-console
+      settings:
+        web-allow-others: true
   jpa:
     defer-datasource-initialization: true
+    show-sql: true
+    properties:
+      hibernate:
+        format_sql: true
   sql:
     init:
       mode: always
+      platform: h2
+  datasource:
+    url: jdbc:h2:mem:testdb
+    driverClassName: org.h2.Driver
+    username: sa
+    password: 
+
+logging:
+  level:
+    com.demo.countryservice: DEBUG
+    org.springframework.web: INFO
+    org.hibernate: INFO
 EOF
-                    echo "✅ Fichier application-prod.yml créé"
+                    echo "✅ Fichier application-prod.yml créé avec configuration Prometheus complète"
                     cat src/main/resources/application-prod.yml
                 '''
             }
@@ -145,16 +180,23 @@ EOF
                     # Attendre que le déploiement soit créé
                     sleep 15
                     
-                    # Corriger le service pour utiliser le bon port
-                    kubectl patch service -n jenkins country-service -p '{"spec":{"ports":[{"port":8080,"targetPort":8080,"nodePort":30008}]}}' || echo "⚠️ Service patch échoué"
-                    
-                    # Corriger les probes avec le bon port et configuration
+                    # S'assurer que les variables d'environnement pour Prometheus sont correctes
                     kubectl patch deployment -n jenkins country-service -p '{
                         "spec": {
                             "template": {
                                 "spec": {
                                     "containers": [{
                                         "name": "country-service",
+                                        "env": [
+                                            {
+                                                "name": "MANAGEMENT_ENDPOINTS_WEB_EXPOSURE_INCLUDE",
+                                                "value": "health,info,metrics,prometheus"
+                                            },
+                                            {
+                                                "name": "MANAGEMENT_ENDPOINT_PROMETHEUS_ENABLED", 
+                                                "value": "true"
+                                            }
+                                        ],
                                         "livenessProbe": {
                                             "httpGet": {
                                                 "path": "/actuator/health",
@@ -167,7 +209,7 @@ EOF
                                         },
                                         "readinessProbe": {
                                             "httpGet": {
-                                                "path": "/actuator/health",
+                                                "path": "/actuator/health", 
                                                 "port": 8080
                                             },
                                             "initialDelaySeconds": 60,
@@ -244,7 +286,7 @@ EOF
                         }' \
                         http://admin:admin@localhost:3000/api/datasources || echo "Datasource peut déjà exister"
                         
-                        # Importer un dashboard simple
+                        # Importer un dashboard COMPLET pour country-service
                         curl -X POST -H "Content-Type: application/json" \
                         -d '{
                             "dashboard": {
@@ -260,10 +302,47 @@ EOF
                                         "targets": [
                                             {
                                                 "expr": "up{job=\\"country-service\\"}",
-                                                "legendFormat": "Service Status"
+                                                "legendFormat": "{{instance}}"
                                             }
                                         ],
-                                        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0}
+                                        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+                                        "fieldConfig": {
+                                            "defaults": {
+                                                "color": {
+                                                    "mode": "thresholds"
+                                                },
+                                                "thresholds": {
+                                                    "steps": [
+                                                        {"color": "red", "value": null},
+                                                        {"color": "green", "value": 1}
+                                                    ]
+                                                }
+                                            }
+                                        }
+                                    },
+                                    {
+                                        "id": 2,
+                                        "title": "HTTP Requests Rate",
+                                        "type": "graph",
+                                        "targets": [
+                                            {
+                                                "expr": "rate(http_server_requests_seconds_count[5m])",
+                                                "legendFormat": "{{method}} {{status}}"
+                                            }
+                                        ],
+                                        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8}
+                                    },
+                                    {
+                                        "id": 3, 
+                                        "title": "JVM Memory Usage",
+                                        "type": "graph",
+                                        "targets": [
+                                            {
+                                                "expr": "jvm_memory_used_bytes{area=\\"heap\\"}",
+                                                "legendFormat": "{{instance}}"
+                                            }
+                                        ],
+                                        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 16}
                                     }
                                 ],
                                 "time": {
@@ -281,10 +360,10 @@ EOF
             }
         }
 
-        stage('Verify Deployment') {
+        stage('Verify Deployment & Metrics') {
             steps {
                 sh '''
-                    echo "🔍 Vérification du déploiement..."
+                    echo "🔍 Vérification du déploiement et des métriques..."
                     
                     # Vérifier l'état des pods
                     echo "📦 État des pods:"
@@ -294,15 +373,25 @@ EOF
                     echo "📱 Test de l'application..."
                     timeout 60 bash -c 'until curl -f http://localhost:30008/actuator/health; do sleep 5; done' && echo "✅ Application accessible" || echo "❌ Application non accessible"
                     
-                    # Vérifier les endpoints de santé
-                    curl -s http://localhost:30008/actuator/health | head -5 || echo "Health endpoint non disponible"
-                    curl -s http://localhost:30008/actuator/info | head -5 || echo "Info endpoint non disponible"
+                    # Vérifier les endpoints de métriques
+                    echo "📊 Test des métriques Prometheus..."
+                    if curl -s http://localhost:30008/actuator/prometheus | grep -q "jvm_memory_used_bytes"; then
+                        echo "✅ Métriques Prometheus exposées avec succès"
+                        curl -s http://localhost:30008/actuator/prometheus | head -5
+                    else
+                        echo "❌ Métriques Prometheus non disponibles"
+                        curl -s http://localhost:30008/actuator/prometheus | head -5
+                    fi
 
                     # Vérifier les services de monitoring
                     echo "📊 Test des services de monitoring..."
                     curl -s --connect-timeout 10 '$PROMETHEUS_URL' > /dev/null && echo "✅ Prometheus accessible" || echo "❌ Prometheus non accessible"
                     curl -s --connect-timeout 10 '$GRAFANA_URL' > /dev/null && echo "✅ Grafana accessible" || echo "❌ Grafana non accessible"
                     curl -s --connect-timeout 10 '$PUSHGATEWAY_URL' > /dev/null && echo "✅ Pushgateway accessible" || echo "❌ Pushgateway non accessible"
+                    
+                    # Vérifier que Prometheus scrape les métriques
+                    echo "🔍 Vérification des targets Prometheus..."
+                    curl -s '$PROMETHEUS_URL/api/v1/targets' | grep -A 10 -B 10 "country-service" || echo "⚠️ country-service non trouvé dans les targets Prometheus"
                 '''
             }
         }
@@ -391,8 +480,8 @@ EOF
                     echo ""
                     echo "💡 COMMANDES DE VÉRIFICATION:"
                     echo "kubectl get pods -n jenkins"
-                    echo "curl http://localhost:30008/actuator/health"
-                    echo "docker ps"
+                    echo "curl http://localhost:30008/actuator/prometheus"
+                    echo "curl http://localhost:9090/api/v1/targets | grep country-service"
                 '''
             }
         }
@@ -403,8 +492,8 @@ EOF
                     echo "🔧 CONSEILS DE DÉPANNAGE:"
                     echo "1. Vérifiez les pods Kubernetes: kubectl get pods -n jenkins"
                     echo "2. Vérifiez les logs: kubectl logs -n jenkins deployment/country-service"
-                    echo "3. Vérifiez les événements: kubectl get events -n jenkins --sort-by=.lastTimestamp"
-                    echo "4. Vérifiez Docker: docker ps"
+                    echo "3. Vérifiez les métriques: curl http://localhost:30008/actuator/prometheus"
+                    echo "4. Vérifiez Prometheus targets: curl http://localhost:9090/api/v1/targets"
                     echo "5. Vérifiez la configuration: kubectl describe deployment -n jenkins country-service"
                 '''
             }
