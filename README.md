@@ -1,7 +1,7 @@
 # Country Service
 
 **Country Service** is a RESTful web service built with Spring Boot for managing country data. It demonstrates a full CI/CD pipeline with Jenkins, automated testing, code quality analysis, artifact management, and deployment.
-
+![CI/CD and Monitoring Architecture](Pipline.png)
 ## Technologies
 - **Backend:** Java 21, Spring Boot 3.5.6, Spring Data JPA/REST, H2/MySQL, Lombok  
 - **Testing:** JUnit 5, Mockito, MockMvc  
@@ -76,14 +76,14 @@ mvn spring-boot:run
 Access: http://localhost:8082
 
 ### CI/CD Pipeline Stages
-# Checkout: Pull latest code from GitHub
-# Compile: Compile Java source code
-# Test: Run unit and integration tests
-# Package: Build JAR/WAR artifact
-# SonarQube Analysis: Analyze code quality
-# Nexus Upload: Publish artifact to Nexus
-# Deploy to Tomcat: Deploy using Ansible
-# Trigger pipeline automatically on Git push:
+#### Checkout: Pull latest code from GitHub
+#### Compile: Compile Java source code
+#### Test: Run unit and integration tests
+#### Package: Build JAR/WAR artifact
+#### SonarQube Analysis: Analyze code quality
+#### Nexus Upload: Publish artifact to Nexus
+#### Deploy to Tomcat: Deploy using Ansible
+#### Trigger pipeline automatically on Git push:
 ```bash
 git add .
 git commit -m "Your commit message"
@@ -118,3 +118,4 @@ Nexus: http://localhost:8081
 Jenkins: http://localhost:8080
 Prometheus: http://localhost:9090
 Grafana: http://localhost:3000
+
